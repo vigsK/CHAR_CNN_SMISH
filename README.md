@@ -1,184 +1,435 @@
-## Character Based CNN
+# Char-CNN Smishing Classifier with EVA Attack
 
-[![MIT](https://img.shields.io/badge/license-MIT-5eba00.svg)](https://github.com/ahmedbesbes/character-based-cnn/blob/master/LICENSE)
-[![contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg?style=flat)](https://github.com/ahmedbesbes/character-based-cnn/issues)
-[![Twitter](https://img.shields.io/twitter/follow/ahmed_besbes_.svg?label=Follow&style=social)](https://twitter.com/ahmed_besbes_)
-[![Stars](https://img.shields.io/github/stars/ahmedbesbes/character-based-cnn.svg?style=social)](https://github.com/ahmedbesbes/character-based-cnn/stargazers)
+> **Cybersecurity Project** — 4th Year Undergraduate  
+> Implementation of *"On-Device Smishing Classifier Resistant to Text Evasion Attack"*  
+> Seo et al., IEEE Access 2024 · DOI: [10.1109/ACCESS.2024.3349577](https://doi.org/10.1109/ACCESS.2024.3349577)
 
+---
 
-This repo contains a PyTorch implementation of a character-level convolutional neural network for text classification.
+## Table of Contents
 
-The model architecture comes from this paper: https://arxiv.org/pdf/1509.01626.pdf
+1. [What is Smishing?](#what-is-smishing)
+2. [Paper Summary](#paper-summary)
+3. [What This Project Implements](#what-this-project-implements)
+4. [Model Architecture](#model-architecture)
+5. [EVA Attack Algorithm](#eva-attack-algorithm)
+6. [Dataset](#dataset)
+7. [Project Structure](#project-structure)
+8. [How to Run (Google Colab)](#how-to-run-google-colab)
+9. [How to Run (Local)](#how-to-run-local)
+10. [Results](#results)
+11. [Paper vs Our Implementation](#paper-vs-our-implementation)
+12. [Dependencies](#dependencies)
 
-![Network architecture](plots/character_cnn.png)
+---
 
-There are two variants: a large and a small. You can switch between the two by changing the configuration file.
+## What is Smishing?
 
-This architecture has 6 convolutional layers:
+**Smishing** (SMS phishing) is a cyberattack where criminals send fraudulent text messages impersonating banks, delivery services, or government agencies to trick victims into clicking malicious links or revealing personal data.
 
-|Layer|Large Feature|Small Feature|Kernel|Pool|
-|-|-|-|-|-|
-|1|1024|256|7|3|
-|2|1024|256|7|3|
-|3|1024|256|3|N/A|
-|4|1024|256|3|N/A|
-|5|1024|256|3|N/A|
-|6|1024|256|3|3|
+Key facts from the paper:
+- 700% surge in smishing attacks in H1 2021 (Proofpoint)
+- 98% of smishing messages are **variants** of a small set of original messages — scammers just tweak the text slightly to evade detection
+- Damage in South Korea alone: ₩1,265 billion in 2021
 
-and 2 fully connected layers:
+---
 
-|Layer|Output Units Large|Output Units Small|
-|-|-|-|
-|7|2048|1024|
-|8|2048|1024|
-|9|Depends on the problem|Depends on the problem|
+## Paper Summary
 
-## Video tutorial
+The paper proposes a complete pipeline for building a practical, on-device smishing classifier:
 
-If you're interested in how character CNN work as well as in the demo of this project you can check my youtube video tutorial.
+```
+Real SMS Data → Preprocessing → Topic Clustering → Training → Evaluation → Adversarial Training → Final Model
+```
 
+**Three core contributions:**
 
-<p align="center">
-  <a href="https://www.youtube.com/watch?v=CNY8VjJt-iQ">
-    <img src="https://img.youtube.com/vi/CNY8VjJt-iQ/0.jpg">
-  </a>
-</p>
+| Contribution | Description |
+|---|---|
+| **Lightweight Char-CNN** | 127 kB model that runs entirely on-device — no cloud, no privacy leak |
+| **EVA Attack Tool** | Text evasion attack that generates smishing variants to test robustness |
+| **Adversarial Training** | Retraining with EVA-generated examples to make the model harder to fool |
 
-## Why you should care about character level CNNs
+**Key finding:** A model with 99% accuracy on clean data can still be fooled **82% of the time** with simple text tweaks. Adversarial training cuts this to **41%** while keeping accuracy at 99%.
 
-They have very nice properties:
+---
 
-- They are quite powerful in text classification (see paper's benchmark) even though they don't have any notion of semantics
-- You don't need to apply any text preprocessing (tokenization, lemmatization, stemming ...) while using them
-- They handle misspelled words and OOV (out-of-vocabulary) tokens
-- They are faster to train compared to recurrent neural networks
-- They are lightweight since they don't require storing a large word embedding matrix. Hence, you can deploy them in production easily
+## What This Project Implements
 
+| Component | Status | Notes |
+|---|---|---|
+| Char-CNN (paper Table 3 architecture) | ✅ | embedding=48, filters=192, kernel=12, hidden=10 |
+| URL / CALL / FILE masking | ✅ | Matches paper's Section IV preprocessing |
+| Character vocabulary encoding | ✅ | 70-char English alphabet, reversed encoding |
+| Weighted sampling for class imbalance | ✅ | Paper approach |
+| EVA Phase 1: Preprocess | ✅ | Mask tokens before attack |
+| EVA Phase 2: BreakPatterns | ✅ | Remove strong smishing tokens |
+| EVA Phase 3: PerturbStruct | ✅ | Space/line-break perturbations |
+| EVA Phase 4: ImportantTokens | ✅ | Rank words by confidence impact |
+| EVA Phase 5: PerturbChar | ✅ | Leet substitutions, typo insert/delete |
+| EVA Phase 6: PerturbWord | ✅ | BERT fill-mask substitution (bert-base-uncased) |
+| Adversarial training (Section VII) | ✅ | Collection mode + fine-tuning |
+| Edit Distance Rate metric | ✅ | Paper's edr formula with Levenshtein |
+| Final comparison table | ✅ | Matches paper Table 5 format |
 
-## Training a sentiment classifier on french customer reviews
+---
 
-I have tested this model on a set of french labeled customer reviews (of over 3 millions rows). I reported the metrics in TensorboardX. 
+## Model Architecture
 
-I got the following results
+Based on **Table 3** in the paper. The model is intentionally tiny — designed for on-device inference.
 
-||F1 score|Accuracy|
-|-|-|-|
-|train|0.965|0.9366|
-|test|0.945|0.915|
+```
+Input SMS text
+     │
+     ▼
+Character Encoding  ← reversed character indices (0 = padding)
+     │
+     ▼
+Embedding Layer     ← vocab_size → 48 dimensions
+     │
+     ▼
+Conv1D              ← 192 filters, kernel_size=12, ReLU
+     │
+     ▼
+Global Max Pool     ← takes max across entire sequence → shape (192,)
+     │
+     ▼
+Linear(192 → 10)    ← "FFN with ten hidden cells" (paper)
++ ReLU + Dropout(0.5)
+     │
+     ▼
+Linear(10 → 2)      ← Normal / Smishing
+     │
+     ▼
+Softmax → P(smishing)
+```
 
-![Training metrics](plots/training_metrics.PNG)
+**Why this architecture?**
+- No recurrence → fast inference
+- Character-level → no vocabulary needed, handles typos and leet-speak naturally
+- Global max pool → fixed-size output regardless of SMS length
+- Only ~116k parameters → ~453 kB in PyTorch float32 (paper achieves 127 kB after TFLite int8 quantization)
+
+---
+
+## EVA Attack Algorithm
+
+EVA (text **Ev**asion **A**ttack) is a black-box attack — it only needs the model's confidence score, not its internals. It mirrors what a real scammer would do.
+
+```
+Input: smishing message m, model F, edit budget µ_edit=0.4
+
+Phase 1 — Preprocess
+  └─ Mask URLs, normalize text
+
+Phase 2 — BreakPatterns
+  └─ Remove strong smishing tokens (free, prize, claim, urgent, ...)
+  └─ If confidence < 0.5 → DONE ✓
+
+Phase 3 — PerturbStruct
+  └─ Try adding/removing spaces and line breaks
+  └─ Keep changes that reduce confidence score
+  └─ If confidence < 0.5 → DONE ✓
+
+Phase 4 — ImportantTokens
+  └─ Delete each word, measure confidence drop
+  └─ Rank words by how much removing them helps
+
+Phase 5+6 — PerturbChar & PerturbWord (per important token)
+  ├─ Character: leet (e→3, o→0, s→5), typo insert/delete, symbol insert
+  ├─ Word: delete word, BERT fill-mask substitution, swap adjacent words
+  └─ If confidence < 0.5 AND edr ≤ 0.4 → DONE ✓
+
+Output: adversarial message (or None if budget exhausted)
+```
+
+**Success condition:** `P(smishing) < 0.5` AND `levenshtein(original, perturbed) / len(original) ≤ 0.40`
+
+**Example from our run:**
+```
+Original    [0.989]: congratulations! you've won a $1000 gift card. click here to claim: linka
+Adversarial [0.029]: congratulations! you've  a good gift card. here to claim: LINKA
+Edit rate  : 0.260  ← only 26% of characters changed, meaning still readable
+```
+
+---
+
+## Dataset
+
+**UCI SMS Spam Collection** — used as a smishing proxy since the paper's KISA dataset (Korean, private) is not publicly available.
+
+| Property | Value |
+|---|---|
+| Total messages | 5,574 |
+| Normal (ham) | 4,827 (86.6%) |
+| Smishing (spam) | 747 (13.4%) |
+| Source | [HuggingFace: ucirvine/sms_spam](https://huggingface.co/datasets/ucirvine/sms_spam) |
+| Download | Automatic — no login required |
+
+**Split used:**
+```
+Train : 3,901  (523 smishing)
+Val   :   836  (112 smishing)
+Test  :   837  (112 smishing)
+```
+
+**Why this dataset?** The original paper uses a Korean dataset from KISA (government agency). For an English implementation, the UCI SMS Spam Collection is the closest public equivalent with real-world spam/phishing messages.
+
+---
+
+## Project Structure
+
+```
+CHAR_CNN_SMISH/
+│
+├── Smishing CharCNN Colab_NEW.ipynb   ← MAIN NOTEBOOK (run this)
+├── smishing_charcnn_colab.ipynb       ← original version
+│
+├── src/
+│   ├── model.py          ← Zhang et al. 2015 large CharCNN (original repo)
+│   ├── data_loader.py    ← dataset loading and encoding utilities
+│   ├── utils.py          ← text preprocessing, metrics
+│   └── focal_loss.py     ← focal loss implementation
+│
+├── train.py              ← CLI training script (original repo)
+├── predict.py            ← CLI inference script (original repo)
+├── config.json           ← model config (original repo)
+│
+├── plots/
+│   ├── character_cnn.png      ← Zhang et al. architecture diagram
+│   ├── conv_layers.png
+│   ├── fc_layers.png
+│   └── training_metrics.PNG
+│
+└── README.md
+```
+
+> **Note:** `src/model.py`, `train.py`, and `predict.py` are from the original [ahmedbesbes/character-based-cnn](https://github.com/ahmedbesbes/character-based-cnn) repo (Zhang et al. 2015 large architecture). The smishing notebook implements the **paper's simplified architecture** (1 conv layer) independently inside the notebook.
+
+---
+
+## How to Run (Google Colab)
+
+This is the recommended way — no local setup needed.
+
+### Step 1 — Open the notebook
+
+Upload `Smishing CharCNN Colab_NEW.ipynb` to [colab.research.google.com](https://colab.research.google.com)
+
+Or open directly: **File → Upload notebook → select the .ipynb file**
+
+### Step 2 — Enable GPU
+
+```
+Runtime → Change runtime type → Hardware accelerator → T4 GPU → Save
+```
+
+Without GPU the training will still work but takes ~5× longer.
+
+### Step 3 — Run all cells in order
+
+```
+Runtime → Run all   (Ctrl+F9)
+```
+
+Or run cell by cell with **Shift+Enter**.
+
+### Cell-by-cell guide
+
+| Cell | What it does | Expected time |
+|---|---|---|
+| Cell 1 | Install packages | ~1 min |
+| Cell 2 | Imports | instant |
+| Cell 3 | Config (model hyperparameters) | instant |
+| Cell 4 | Download & preprocess dataset | ~30 sec |
+| Cell 5 | Plot dataset analysis | instant |
+| Cell 6 | Train/val/test split | instant |
+| Cell 7 | Define Char-CNN model | instant |
+| Cell 8 | Dataset class + DataLoaders | instant |
+| Cell 9 | Training loop functions | instant |
+| Cell 10 | **Train base model (15 epochs)** | ~3–5 min (GPU) |
+| Cell 11 | Evaluate + confusion matrix | ~30 sec |
+| Cell 12 | EVA helper functions | instant |
+| Cell 13 | Load BERT fill-mask | ~2 min (first download) |
+| Cell 14 | EVA algorithm | instant |
+| Cell 15 | **Run EVA attack (100 messages)** | ~10–20 min |
+| Cell 16 | Show attack examples | ~1 min |
+| Cell 17 | Collect adversarial examples | ~15–30 min |
+| Cell 18 | **Adversarial training (10 epochs)** | ~3 min |
+| Cell 19 | Evaluate adversarial model | ~30 sec |
+| Cell 20 | Re-run EVA on adversarial model | ~10–20 min |
+| Cell 21 | Final comparison plot | instant |
+| Cell 22 | Interactive demo | instant |
+| Cell 23 | EVA demo on single message | ~2 min |
+
+**Total runtime: ~1.5–2 hours** (mostly EVA attack cells 15, 17, 20)
+
+### To speed up the attack cells
+
+In Cell 15, reduce `ATTACK_SAMPLE`:
+```python
+ATTACK_SAMPLE = 30   # instead of 100 — takes ~5 min total
+```
+
+---
+
+## How to Run (Local)
+
+### Prerequisites
+
+```bash
+python >= 3.9
+pip install torch transformers datasets scikit-learn pandas numpy matplotlib seaborn tqdm
+```
+
+For GPU support, install PyTorch with CUDA from [pytorch.org](https://pytorch.org/get-started/locally/).
+
+### Run the notebook locally
+
+```bash
+pip install jupyter
+jupyter notebook "Smishing CharCNN Colab_NEW.ipynb"
+```
+
+### Run the original CLI training script
+
+The `train.py` / `predict.py` scripts are for the original Zhang et al. large CharCNN. To train on a CSV dataset:
+
+```bash
+python train.py \
+  --data_path ./data/sms.csv \
+  --text_column text \
+  --label_column label \
+  --max_length 160 \
+  --epochs 10 \
+  --batch_size 128 \
+  --optimizer adam \
+  --learning_rate 0.001 \
+  --checkpoint 1 \
+  --output ./models/
+```
+
+To run inference on a single message:
+
+```bash
+python predict.py \
+  --model ./models/your_model.pth \
+  --text "Congratulations! You have won a free prize. Click here to claim." \
+  --max_length 160 \
+  --number_of_classes 2
+```
+
+---
+
+## Results
+
+Results from `Smishing CharCNN Colab_NEW.ipynb` run on Google Colab T4 GPU:
+
+### Classification Performance
+
+| Metric | Base Char-CNN | Adv Char-CNN |
+|---|:---:|:---:|
+| Accuracy | 0.9869 | 0.9881 |
+| F1 Score | 0.9867 | 0.9880 |
+| False Positive Rate | 0.0041 | 0.0041 |
+| False Negative Rate | 0.0714 | 0.0625 |
+
+### Robustness Against EVA Attack
+
+| Model | Attack Success Rate (ASR) | Interpretation |
+|---|:---:|---|
+| Base Char-CNN | 0.6882 | Fooled 69% of the time |
+| Adv Char-CNN | 0.6170 | Fooled 62% of the time |
+
+### EVA Attack Demo Output
+
+```
+Original  [0.989]: congratulations! you've won a $1000 gift card. click here to claim: linka
+Adversarial [0.029]: congratulations! you've  a good gift card. here to claim: LINKA
+Edit distance rate: 0.260  ←  only 26% of characters changed
+✓ Attack successful!
+
+Adversarially trained model on same message:
+Prediction: NORMAL (prob: 0.006)  ←  model still fooled (needs more training data)
+```
+
+---
+
+## Paper vs Our Implementation
+
+### Metric Comparison (Table 5)
+
+| Metric | Paper Base | Our Base | Paper Adv | Our Adv |
+|---|:---:|:---:|:---:|:---:|
+| Accuracy | 0.9959 | 0.9869 | 0.9944 | 0.9881 |
+| F1 Score | 0.9946 | 0.9867 | 0.9927 | 0.9880 |
+| FPR | 0.0041 | **0.0041 ✅** | 0.0054 | 0.0041 |
+| FNR | 0.0043 | 0.0714 ⚠️ | 0.0059 | 0.0625 |
+| ASR | 0.8241 | 0.6882 | 0.4091 | 0.6170 |
+
+### Why the gaps exist
+
+| Gap | Reason |
+|---|---|
+| Accuracy ~0.01 lower | Paper trains on 1.2M messages; we use 5.5k |
+| FNR much higher (0.071 vs 0.004) | Only 523 smishing training examples vs 250,000 in the paper |
+| FPR exactly matches | Both achieve 0.0041 — shows architecture is correct |
+| ASR reduction smaller (0.07 vs 0.41) | Paper uses 84,000 adversarial training examples; we collect only 88 due to small dataset |
+
+### Key differences: Paper vs Implementation
+
+| Aspect | Paper | This Implementation |
+|---|---|---|
+| Dataset | KISA (Korean, private) 250k smishing + 950k normal | UCI SMS Spam (English, public) 747 spam + 4827 ham |
+| Language | Korean | English |
+| BERT model | `lassl/bert-ko-base` (Korean) | `bert-base-uncased` (English) |
+| Tokenizer | Korean morpheme tokenizer | Whitespace tokenization |
+| Model deployment | TFLite (127 kB after int8 quantization) | PyTorch (~454 kB float32) |
+| Adversarial training examples | 84,000–120,000 | ~88 (limited by dataset size) |
+
+### What replicates correctly
+
+- ✅ Architecture and hyperparameters match Table 3 exactly
+- ✅ FPR matches the paper's value (0.0041)
+- ✅ All 6 EVA phases implemented and functional
+- ✅ ASR goes **down** after adversarial training (correct direction)
+- ✅ Classification accuracy stays high after adversarial training (correct behaviour)
+- ✅ Adversarial examples visually similar to originals (edit rate ~0.26)
+
+---
 
 ## Dependencies
 
-- numpy 
-- pandas
-- sklearn
-- PyTorch 0.4.1
-- tensorboardX
-- Tensorflow (to be able to run TensorboardX)
+| Package | Purpose |
+|---|---|
+| `torch` | Char-CNN model training and inference |
+| `transformers` | BERT fill-mask for EVA word-level perturbations |
+| `datasets` | Load UCI SMS Spam from HuggingFace Hub |
+| `scikit-learn` | Train/test split, metrics (accuracy, F1, confusion matrix) |
+| `pandas` / `numpy` | Data handling |
+| `matplotlib` / `seaborn` | Plots and confusion matrix |
+| `tqdm` | Progress bars |
 
-## Structure of the code
-
-At the root of the project, you will have:
-
-- **train.py**: used for training a model
-- **predict.py**: used for the testing and inference
-- **config.json**: a configuration file for storing model parameters (number of filters, neurons)
-- **src**: a folder that contains:
-  - **cnn_model.py**: the actual CNN model (model initialization and forward method)
-  - **data_loader.py**: the script responsible of passing the data to the training after processing it
-  - **utils.py**: a set of utility functions for text preprocessing (url/hashtag/user_mention removal)
-
-## How to use the code
-
-### Training
-
-**The code currently works only on binary labels (0/1)**
-
-Launch train.py with the following arguments:
-
-- `data_path`: path of the data. Data should be in csv format with at least a column for text and a column for the label
-- `validation_split`: the ratio of validation data. default to 0.2
-- `label_column`: column name of the labels
-- `text_column`: column name of the texts 
-- `max_rows`: the maximum number of rows to load from the dataset. (I mainly use this for testing to go faster)
-- `chunksize`: size of the chunks when loading the data using pandas. default to 500000
-- `encoding`: default to utf-8
-- `steps`: text preprocessing steps to include on the text like hashtag or url removal
-- `group_labels`: whether or not to group labels. Default to None.
-- `use_sampler`: whether or not to use a weighted sampler to overcome class imbalance
-- `alphabet`: default to abcdefghijklmnopqrstuvwxyz0123456789,;.!?:'\"/\\|_@#$%^&*~\`+-=<>()[]{} (normally you should not modify it)
-- `number_of_characters`: default 70
-- `extra_characters`: additional characters that you'd add to the alphabet. For example uppercase letters or accented characters
-- `max_length`: the maximum length to fix for all the documents. default to 150 but should be adapted to your data
-- `epochs`: number of epochs 
-- `batch_size`: batch size, default to 128.
-- `optimizer`: adam or sgd, default to sgd
-- `learning_rate`: default to 0.01
-- `class_weights`: whether or not to use class weights in the cross entropy loss
-- `focal_loss`: whether or not to use the focal loss
-- `gamma`: gamma parameter of the focal loss. default to 2 
-- `alpha`: alpha parameter of the focal loss. default to 0.25
-- `schedule`: number of epochs by which the learning rate decreases by half (learning rate scheduling works only for sgd), default to 3. set it to 0 to disable it
-- `patience`: maximum number of epochs to wait without improvement of the validation loss, default to 3
-- `early_stopping`: to choose whether or not to early stop the training. default to 0. set to 1 to enable it.
-- `checkpoint`: to choose to save the model on disk or not. default to 1, set to 0 to disable model checkpoint
-- `workers`: number of workers in PyTorch DataLoader, default to 1
-- `log_path`: path of tensorboard log file
-- `output`: path of the folder where models are saved
-- `model_name`: prefix name of saved models
-
-Example usage:
+Install all at once:
 
 ```bash
-python train.py --data_path=/data/tweets.csv --max_rows=200000
+pip install torch transformers datasets scikit-learn pandas numpy matplotlib seaborn tqdm
 ```
 
-### Plotting results to TensorboardX
+---
 
-Run this command at the root of the project:
+## References
 
-```bash
-tensorboard --logdir=./logs/ --port=6006
-```
+1. **Seo et al. (2024).** On-Device Smishing Classifier Resistant to Text Evasion Attack. *IEEE Access*, 12, 4762–4779. DOI: 10.1109/ACCESS.2024.3349577
 
-Then go to: http://localhost:6006 (or whatever host you're using)
+2. **Zhang et al. (2015).** Character-level Convolutional Networks for Text Classification. *NeurIPS*. arXiv:1509.01626
 
-### Prediction
+3. **Devlin et al. (2018).** BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding. arXiv:1810.04805
 
-Launch predict.py with the following arguments:
+4. **UCI SMS Spam Collection.** Available at: https://huggingface.co/datasets/ucirvine/sms_spam
 
-- `model`: path of the pre-trained model
-- `text`: input text
-- `steps`: list of preprocessing steps, default to lower
-- `alphabet`: default to 'abcdefghijklmnopqrstuvwxyz0123456789-,;.!?:\'"\\/|_@#$%^&*~`+-=<>()[]{}\n'
-- `number_of_characters`: default to 70
-- `extra_characters`: additional characters that you'd add to the alphabet. For example uppercase letters or accented characters
-- `max_length`: the maximum length to fix for all the documents. default to 150 but should be adapted to your data
-
-Example usage:
-
-```bash
-python predict.py ./models/pretrained_model.pth --text="I love pizza !" --max_length=150
-
-```
-
-## Download pretrained models
-
-- Sentiment analysis model on French customer reviews (3M documents): [download link](https://drive.google.com/file/d/1pmzeac-Vx07ScBL0S-xJ5EqRJYGdtWvh/view?usp=sharing)
-
-  When using it:
-  - set max_length to 300
-  - use extra_characters="éàèùâêîôûçëïü" (accented letters)
-
-## Contributions - PR are welcome:
-
-Here's a non-exhaustive list of potential future features to add:
-
-- Adapt the loss for multi-class classification 
-- Log training and validation metrics for each epoch to a text file
-- Provide notebook tutorials
+---
 
 ## License
 
-This project is licensed under the MIT License
+MIT License — see [LICENSE](LICENSE) for details.
