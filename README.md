@@ -1,8 +1,6 @@
 # Char-CNN Smishing Classifier with EVA Attack
 
-> **Cybersecurity Project** — 4th Year Undergraduate  
-> Implementation of *"On-Device Smishing Classifier Resistant to Text Evasion Attack"*  
-> Seo et al., IEEE Access 2024 · DOI: [10.1109/ACCESS.2024.3349577](https://doi.org/10.1109/ACCESS.2024.3349577)
+
 
 ---
 
